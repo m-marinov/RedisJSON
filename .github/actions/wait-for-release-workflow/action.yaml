@@ -1,0 +1,131 @@
+name: Wait for Release Workflow
+description: Finds and waits for a workflow triggered by a release publish event in a remote repository
+
+inputs:
+  repository:
+    description: 'Target repository (format: owner/repo)'
+    required: true
+  workflow_file:
+    description: 'Workflow file name triggered by release (e.g., release.yml)'
+    required: true
+  release_tag:
+    description: 'Release tag to track (e.g., v1.2.3)'
+    required: true
+  github_app_id:
+    description: 'GitHub App ID for authentication'
+    required: true
+  github_app_private_key:
+    description: 'GitHub App private key for authentication'
+    required: true
+  max_wait_minutes:
+    description: 'Maximum time in minutes to wait for workflow completion (default: 360)'
+    required: false
+    default: '360'
+  poll_interval_seconds:
+    description: 'Interval in seconds between status checks (default: 120)'
+    required: false
+    default: '120'
+
+outputs:
+  workflow_status:
+    description: 'Final workflow status (success, failure, skipped, not_found)'
+    value: ${{ steps.wait-for-workflow.outputs.status }}
+  workflow_url:
+    description: 'URL to the workflow run'
+    value: ${{ steps.wait-for-workflow.outputs.url }}
+  workflow_run_id:
+    description: 'Workflow run ID'
+    value: ${{ steps.wait-for-workflow.outputs.run_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        if [[ ! "${REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+          echo "❌ Error: repository must be in format 'owner/repo'"
+          exit 1
+        fi
+        echo "🎯 Target: ${REPOSITORY} | Workflow: ${{ inputs.workflow_file }}"
+
+    - name: Install Python dependencies
+      shell: bash
+      run: |
+        pip install --quiet PyJWT cryptography
+
+    - name: Extract repository owner and name
+      id: extract-repo
+      shell: bash
+      env:
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        OWNER=$(echo "${REPOSITORY}" | cut -d'/' -f1)
+        REPO_NAME=$(echo "${REPOSITORY}" | cut -d'/' -f2)
+        echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+        echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Generate GitHub App installation token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.github_app_id }}
+        private-key: ${{ inputs.github_app_private_key }}
+        owner: ${{ steps.extract-repo.outputs.owner }}
+        repositories: ${{ steps.extract-repo.outputs.repo_name }}
+
+    - name: Capture token creation timestamp
+      id: capture-timestamp
+      shell: bash
+      run: |
+        echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+    - name: Find workflow run for release
+      id: find-workflow-run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        WORKFLOW_FILE: ${{ inputs.workflow_file }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+      run: |
+        MAX_RETRIES=5
+        RETRY_INTERVAL=60
+
+        for i in $(seq 1 $MAX_RETRIES); do
+          RUN_ID=$(gh run list \
+            --repo "${REPOSITORY}" \
+            --workflow "${WORKFLOW_FILE}" \
+            --json databaseId,headBranch \
+            --jq '.[] | select(.headBranch == "'"${RELEASE_TAG}"'") | .databaseId' \
+            | head -1)
+
+          if [[ -n "${RUN_ID}" ]]; then
+            echo "✅ Found workflow run: ${RUN_ID}"
+            echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "⏳ Attempt ${i}/${MAX_RETRIES}: Workflow run not found, retrying in ${RETRY_INTERVAL}s..."
+          sleep $RETRY_INTERVAL
+        done
+
+        echo "❌ No workflow run found for release tag: ${RELEASE_TAG} after ${MAX_RETRIES} attempts"
+        exit 1
+
+    - name: Wait for workflow completion
+      id: wait-for-workflow
+      shell: bash
+      env:
+        GITHUB_APP_ID: ${{ inputs.github_app_id }}
+        GITHUB_APP_PRIVATE_KEY: ${{ inputs.github_app_private_key }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        INITIAL_TOKEN_CREATED_AT: ${{ steps.capture-timestamp.outputs.timestamp }}
+        REPOSITORY: ${{ inputs.repository }}
+        WORKFLOW_RUN_ID: ${{ steps.find-workflow-run.outputs.run_id }}
+      run: |
+        ACTION_PATH="${{ github.action_path }}/../trigger-workflow-and-wait"
+        python3 "${ACTION_PATH}/wait-for-workflow.py"
+
