@@ -1,0 +1,29 @@
+name: Release (TEST)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (format: MAJOR.MINOR.PATCH, e.g., 8.4.8)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (do not push changes)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  wait-for-release:
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for Event TAG workflow
+        uses: ./.github/actions/wait-for-release-workflow
+        with:
+          repository: ${{ github.repository }}
+          workflow_file: event-tag.yml
+          release_tag: v${{ inputs.version }}
+

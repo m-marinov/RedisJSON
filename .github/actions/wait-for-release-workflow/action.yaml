@@ -11,12 +11,6 @@ inputs:
   release_tag:
     description: 'Release tag to track (e.g., v1.2.3)'
     required: true
-  github_app_id:
-    description: 'GitHub App ID for authentication'
-    required: true
-  github_app_private_key:
-    description: 'GitHub App private key for authentication'
-    required: true
   max_wait_minutes:
     description: 'Maximum time in minutes to wait for workflow completion (default: 360)'
     required: false
@@ -67,15 +61,6 @@ runs:
         echo "owner=${OWNER}" >> $GITHUB_OUTPUT
         echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
 
-    - name: Generate GitHub App installation token
-      id: app-token
-      uses: actions/create-github-app-token@v2
-      with:
-        app-id: ${{ inputs.github_app_id }}
-        private-key: ${{ inputs.github_app_private_key }}
-        owner: ${{ steps.extract-repo.outputs.owner }}
-        repositories: ${{ steps.extract-repo.outputs.repo_name }}
-
     - name: Capture token creation timestamp
       id: capture-timestamp
       shell: bash
@@ -86,7 +71,6 @@ runs:
       id: find-workflow-run
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token }}
         REPOSITORY: ${{ inputs.repository }}
         WORKFLOW_FILE: ${{ inputs.workflow_file }}
         RELEASE_TAG: ${{ inputs.release_tag }}
@@ -114,18 +98,3 @@ runs:
 
         echo "❌ No workflow run found for release tag: ${RELEASE_TAG} after ${MAX_RETRIES} attempts"
         exit 1
-
-    - name: Wait for workflow completion
-      id: wait-for-workflow
-      shell: bash
-      env:
-        GITHUB_APP_ID: ${{ inputs.github_app_id }}
-        GITHUB_APP_PRIVATE_KEY: ${{ inputs.github_app_private_key }}
-        GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        INITIAL_TOKEN_CREATED_AT: ${{ steps.capture-timestamp.outputs.timestamp }}
-        REPOSITORY: ${{ inputs.repository }}
-        WORKFLOW_RUN_ID: ${{ steps.find-workflow-run.outputs.run_id }}
-      run: |
-        ACTION_PATH="${{ github.action_path }}/../trigger-workflow-and-wait"
-        python3 "${ACTION_PATH}/wait-for-workflow.py"
-
