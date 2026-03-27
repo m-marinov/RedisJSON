@@ -11,6 +11,12 @@ inputs:
   release_tag:
     description: 'Release tag to track (e.g., v1.2.3)'
     required: true
+#  github_app_id:
+#    description: 'GitHub App ID for authentication'
+#    required: true
+#  github_app_private_key:
+#    description: 'GitHub App private key for authentication'
+#    required: true
   max_wait_minutes:
     description: 'Maximum time in minutes to wait for workflow completion (default: 360)'
     required: false
@@ -61,6 +67,15 @@ runs:
         echo "owner=${OWNER}" >> $GITHUB_OUTPUT
         echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
 
+#    - name: Generate GitHub App installation token
+#      id: app-token
+#      uses: actions/create-github-app-token@v2
+#      with:
+#        app-id: ${{ inputs.github_app_id }}
+#        private-key: ${{ inputs.github_app_private_key }}
+#        owner: ${{ steps.extract-repo.outputs.owner }}
+#        repositories: ${{ steps.extract-repo.outputs.repo_name }}
+
     - name: Capture token creation timestamp
       id: capture-timestamp
       shell: bash
@@ -78,13 +93,14 @@ runs:
       run: |
         MAX_RETRIES=5
         RETRY_INTERVAL=60
+        TAG="v${RELEASE_TAG}"
 
         for i in $(seq 1 $MAX_RETRIES); do
           RUN_ID=$(gh run list \
             --repo "${REPOSITORY}" \
             --workflow "${WORKFLOW_FILE}" \
             --json databaseId,headBranch \
-            --jq '.[] | select(.headBranch == "'"${RELEASE_TAG}"'") | .databaseId' \
+            --jq '.[] | select(.headBranch == "'"${TAG}"'") | .databaseId' \
             | head -1)
 
           if [[ -n "${RUN_ID}" ]]; then
@@ -93,9 +109,24 @@ runs:
             exit 0
           fi
 
-          echo "⏳ Attempt ${i}/${MAX_RETRIES}: Workflow run not found, retrying in ${RETRY_INTERVAL}s..."
+          echo "⏳ Attempt ${i}/${MAX_RETRIES}: Workflow run not found for tag ${TAG}, retrying in ${RETRY_INTERVAL}s..."
           sleep $RETRY_INTERVAL
         done
 
-        echo "❌ No workflow run found for release tag: ${RELEASE_TAG} after ${MAX_RETRIES} attempts"
+        echo "❌ No workflow run found for tag ${TAG} after ${MAX_RETRIES} attempts"
         exit 1
+
+#    - name: Wait for workflow completion
+#      id: wait-for-workflow
+#      shell: bash
+#      env:
+#        GITHUB_APP_ID: ${{ inputs.github_app_id }}
+#        GITHUB_APP_PRIVATE_KEY: ${{ inputs.github_app_private_key }}
+#        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+#        INITIAL_TOKEN_CREATED_AT: ${{ steps.capture-timestamp.outputs.timestamp }}
+#        REPOSITORY: ${{ inputs.repository }}
+#        WORKFLOW_RUN_ID: ${{ steps.find-workflow-run.outputs.run_id }}
+#      run: |
+#        ACTION_PATH="${{ github.action_path }}/../trigger-workflow-and-wait"
+#        python3 "${ACTION_PATH}/wait-for-workflow.py"
+
